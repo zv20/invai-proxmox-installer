@@ -111,12 +111,58 @@ function get_user_input() {
     read -p "Network Bridge [$DEFAULT_BRIDGE]: " BRIDGE
     BRIDGE=${BRIDGE:-$DEFAULT_BRIDGE}
     
+    # Network Configuration
+    echo -e "\n${YELLOW}🌐 Network Configuration${NC}"
+    echo -e "${BLUE}Choose IP address assignment method${NC}"
+    echo -e "  ${GREEN}1)${NC} DHCP (automatic)"
+    echo -e "  ${GREEN}2)${NC} Static IP (manual)"
+    
+    while true; do
+        read -p "Select option [1]: " NET_CHOICE
+        NET_CHOICE=${NET_CHOICE:-1}
+        
+        case $NET_CHOICE in
+            1)
+                IP_CONFIG="dhcp"
+                GATEWAY=""
+                echo -e "${GREEN}✓ Using DHCP${NC}"
+                break
+                ;;
+            2)
+                echo -e "\n${BLUE}Static IP Configuration${NC}"
+                read -p "IP Address/CIDR (e.g., 192.168.1.100/24): " STATIC_IP
+                
+                # Validate IP format
+                if [[ ! $STATIC_IP =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
+                    echo -e "${RED}✖ Invalid IP format. Use format: 192.168.1.100/24${NC}"
+                    continue
+                fi
+                
+                read -p "Gateway (e.g., 192.168.1.1): " GATEWAY
+                
+                # Validate gateway format
+                if [[ ! $GATEWAY =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+                    echo -e "${RED}✖ Invalid gateway format. Use format: 192.168.1.1${NC}"
+                    continue
+                fi
+                
+                IP_CONFIG="$STATIC_IP,gw=$GATEWAY"
+                echo -e "${GREEN}✓ Static IP configured: $STATIC_IP via $GATEWAY${NC}"
+                break
+                ;;
+            *)
+                echo -e "${RED}✖ Invalid choice. Please select 1 or 2${NC}"
+                ;;
+        esac
+    done
+    
     # Storage selection
     echo -e "\n${YELLOW}Available Storage:${NC}"
     pvesm status | grep -E '^[^ ]+' | awk 'NR>1 {print "  • " $1}'
     read -p "Storage for container [local-lvm]: " STORAGE
     STORAGE=${STORAGE:-local-lvm}
     
+    # Display summary
     echo -e "\n${CYAN}═══════════════════════════════════════════════════════════${NC}"
     echo -e "${GREEN}Configuration Summary:${NC}"
     echo -e "  Container ID: ${MAGENTA}$CTID${NC}"
@@ -125,7 +171,13 @@ function get_user_input() {
     echo -e "  Disk: ${MAGENTA}${DISK_SIZE}GB${NC}"
     echo -e "  Memory: ${MAGENTA}${MEMORY}MB${NC}"
     echo -e "  CPU Cores: ${MAGENTA}$CORES${NC}"
-    echo -e "  Network: ${MAGENTA}$BRIDGE${NC}"
+    echo -e "  Network Bridge: ${MAGENTA}$BRIDGE${NC}"
+    if [ "$IP_CONFIG" = "dhcp" ]; then
+        echo -e "  IP Configuration: ${MAGENTA}DHCP${NC}"
+    else
+        echo -e "  IP Configuration: ${MAGENTA}Static - $STATIC_IP${NC}"
+        echo -e "  Gateway: ${MAGENTA}$GATEWAY${NC}"
+    fi
     echo -e "  Storage: ${MAGENTA}$STORAGE${NC}"
     echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}\n"
     
@@ -199,13 +251,13 @@ function create_container() {
         PASSWORD_ARG="--password '$ROOT_PASSWORD'"
     fi
     
-    # Create container
+    # Create container with appropriate network config
     if eval pct create $CTID $TEMPLATE_PATH \
         --hostname $HOSTNAME \
         --memory $MEMORY \
         --cores $CORES \
         --rootfs $STORAGE:$DISK_SIZE \
-        --net0 name=eth0,bridge=$BRIDGE,firewall=1,ip=dhcp \
+        --net0 name=eth0,bridge=$BRIDGE,firewall=1,ip=$IP_CONFIG \
         --features nesting=1 \
         --unprivileged 1 \
         --onboot 1 \
@@ -492,7 +544,9 @@ function completion_message() {
         echo -e "  Root Password: ${GREEN}Set${NC}"
         echo -e "\n${GREEN}🔐 Login Methods:${NC}"
         echo -e "  From Proxmox: ${CYAN}pct enter $CTID${NC}"
-        echo -e "  SSH (if enabled): ${CYAN}ssh root@$CONTAINER_IP${NC}"
+        if [ -n "$CONTAINER_IP" ]; then
+            echo -e "  SSH: ${CYAN}ssh root@$CONTAINER_IP${NC}"
+        fi
     else
         echo -e "  Root Password: ${YELLOW}Not Set${NC}"
         echo -e "\n${GREEN}🔐 Login Method:${NC}"
