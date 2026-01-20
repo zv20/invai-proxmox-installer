@@ -249,7 +249,7 @@ echo "Updating system..."
 apt update && apt upgrade -y
 
 echo "Installing prerequisites..."
-apt install -y curl git ca-certificates gnupg build-essential python3
+apt install -y curl git ca-certificates gnupg build-essential python3 jq
 
 echo "Installing Node.js 20 LTS..."
 curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
@@ -269,6 +269,127 @@ npm install --production
 echo "Creating data directory..."
 mkdir -p data
 chmod 755 data
+
+echo "Creating update script..."
+cat > /usr/local/bin/update-inventory << 'UPDATEEOF'
+#!/bin/bash
+
+# Colors
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+echo -e "${BLUE}╭─────────────────────────────────────────────╮${NC}"
+echo -e "${BLUE}│   🔄 Inventory App Update Manager    │${NC}"
+echo -e "${BLUE}╰─────────────────────────────────────────────╯${NC}"
+echo
+
+cd /opt/invai || exit 1
+
+echo -e "${YELLOW}⏳ Stopping application service...${NC}"
+systemctl stop inventory-app
+
+echo -e "${YELLOW}📥 Fetching latest updates from GitHub...${NC}"
+git fetch origin
+
+# Get current and remote commit
+LOCAL=$(git rev-parse @)
+REMOTE=$(git rev-parse @{u})
+
+if [ $LOCAL = $REMOTE ]; then
+    echo -e "${GREEN}✓ Already up to date!${NC}"
+    echo -e "${YELLOW}▶️ Starting application service...${NC}"
+    systemctl start inventory-app
+    exit 0
+fi
+
+echo -e "${BLUE}🔽 Pulling latest changes...${NC}"
+git pull origin main
+
+echo -e "${YELLOW}📦 Updating dependencies...${NC}"
+npm install --production
+
+echo -e "${YELLOW}▶️ Starting application service...${NC}"
+systemctl start inventory-app
+
+echo -e "${YELLOW}⏳ Waiting for service to be ready...${NC}"
+sleep 3
+
+if systemctl is-active --quiet inventory-app; then
+    echo -e "${GREEN}✓ Update completed successfully!${NC}"
+    
+    # Show current version
+    VERSION=$(jq -r '.version // "unknown"' /opt/invai/package.json 2>/dev/null || echo "unknown")
+    IP=$(hostname -I | awk '{print $1}')
+    echo -e "${GREEN}Version: ${VERSION}${NC}"
+    echo -e "${GREEN}Access at: http://${IP}:3000${NC}"
+else
+    echo -e "${RED}✗ Service failed to start after update!${NC}"
+    echo -e "${YELLOW}Check logs: journalctl -u inventory-app -n 50${NC}"
+    exit 1
+fi
+UPDATEEOF
+
+chmod +x /usr/local/bin/update-inventory
+
+# Create alias
+echo "alias update='update-inventory'" >> /root/.bashrc
+
+echo "Creating dynamic MOTD..."
+# Disable default Debian MOTD scripts
+chmod -x /etc/update-motd.d/* 2>/dev/null || true
+
+# Create custom MOTD script
+mkdir -p /etc/update-motd.d
+cat > /etc/update-motd.d/10-inventory-app << 'MOTDEOF'
+#!/bin/bash
+
+# Colors
+CYAN='\033[0;36m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
+NC='\033[0m'
+
+# Get app info
+VERSION=$(jq -r '.version // "unknown"' /opt/invai/package.json 2>/dev/null || echo "unknown")
+IP=$(hostname -I | awk '{print $1}')
+PORT="3000"
+STATUS=$(systemctl is-active inventory-app 2>/dev/null || echo "inactive")
+
+if [ "$STATUS" = "active" ]; then
+    STATUS_TEXT="${GREEN}✓ Running${NC}"
+    STATUS_ICON="🟢"
+else
+    STATUS_TEXT="${YELLOW}✗ Stopped${NC}"
+    STATUS_ICON="🔴"
+fi
+
+echo -e "${CYAN}"
+echo "╭──────────────────────────────────────────────────────────────────────╮"
+echo -e "│     ${MAGENTA}📦 Inventory Management System${CYAN}                           │"
+echo "╰──────────────────────────────────────────────────────────────────────╯"
+echo -e "${NC}"
+echo -e "  ${BLUE}Version:${NC}  ${GREEN}v${VERSION}${NC}"
+echo -e "  ${BLUE}Status:${NC}   ${STATUS_ICON} ${STATUS_TEXT}"
+echo -e "  ${BLUE}IP Addr:${NC}  ${YELLOW}${IP}${NC}"
+echo -e "  ${BLUE}Port:${NC}     ${YELLOW}${PORT}${NC}"
+echo -e "  ${BLUE}URL:${NC}      ${CYAN}http://${IP}:${PORT}${NC}"
+echo
+echo -e "  ${MAGENTA}🛠️  Commands:${NC}"
+echo -e "    ${GREEN}update${NC}              - Update to latest version"
+echo -e "    ${GREEN}systemctl status inventory-app${NC}  - Check service status"
+echo -e "    ${GREEN}journalctl -fu inventory-app${NC}    - View live logs"
+echo
+MOTDEOF
+
+chmod +x /etc/update-motd.d/10-inventory-app
+
+# Clear existing MOTD
+echo "" > /etc/motd
 
 echo "Creating systemd service..."
 cat > /etc/systemd/system/inventory-app.service << 'EOF'
@@ -388,10 +509,15 @@ function completion_message() {
         echo -e "${YELLOW}Then access at: http://[IP]:$APP_PORT${NC}\n"
     fi
     
+    echo -e "${MAGENTA}🔄 Update Command:${NC}"
+    echo -e "  Inside container, run: ${CYAN}update${NC}"
+    echo -e "  This will fetch and install the latest version from GitHub\n"
+    
     echo -e "${MAGENTA}🔧 Useful Commands:${NC}"
     echo -e "  Check status: ${CYAN}pct exec $CTID -- systemctl status inventory-app${NC}"
     echo -e "  View logs: ${CYAN}pct exec $CTID -- journalctl -u inventory-app -f${NC}"
     echo -e "  Restart app: ${CYAN}pct exec $CTID -- systemctl restart inventory-app${NC}"
+    echo -e "  Update app: ${CYAN}pct exec $CTID -- update-inventory${NC}"
     echo -e "  Enter container: ${CYAN}pct enter $CTID${NC}"
     echo -e "  Stop container: ${CYAN}pct stop $CTID${NC}"
     echo -e "  Start container: ${CYAN}pct start $CTID${NC}\n"
