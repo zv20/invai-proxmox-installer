@@ -11,6 +11,7 @@ One-click automated installer for deploying the Inventory Management System on P
 - 🔄 **Auto-start on Boot** - Container and app start automatically
 - 💾 **Persistent Storage** - SQLite database with proper data directory
 - 📊 **Interactive Setup** - Guided configuration with sensible defaults
+- ⬆️ **Easy Updates** - One-command updates from GitHub
 
 ## 🎯 What This Script Does
 
@@ -91,6 +92,94 @@ Network Bridge [vmbr0]:
   http://192.168.1.100:3000
 ```
 
+## ⬆️ Updating Your Application
+
+Two methods to update your installation when you push changes to GitHub:
+
+### Method 1: Update from Proxmox Host (Recommended)
+
+```bash
+# Download and run update script
+wget https://raw.githubusercontent.com/zv20/invai-proxmox-installer/main/update-from-host.sh
+chmod +x update-from-host.sh
+./update-from-host.sh 600  # Replace 600 with your container ID
+```
+
+Or one-liner:
+```bash
+bash -c "$(wget -qLO - https://raw.githubusercontent.com/zv20/invai-proxmox-installer/main/update-from-host.sh)" -- 600
+```
+
+### Method 2: Update from Inside Container
+
+```bash
+# Enter the container
+pct enter 600
+
+# Download and run update script
+wget https://raw.githubusercontent.com/zv20/invai-proxmox-installer/main/update.sh
+chmod +x update.sh
+./update.sh
+```
+
+### What the Update Does
+
+1. ✓ Shows current version and checks for updates
+2. ✓ Warns if there are uncommitted local changes
+3. ✓ Displays changelog of new commits
+4. ✓ Stops the service gracefully
+5. ✓ Pulls latest code from GitHub
+6. ✓ Updates dependencies (npm install)
+7. ✓ Restarts the service
+8. ✓ Verifies successful startup
+9. ✓ Shows new version and status
+
+### Update Output Example
+
+```
+═══════════════════════════════════════════════════════════
+    📦 Inventory Management System - Update
+═══════════════════════════════════════════════════════════
+
+📋 Current Status
+  Branch: main
+  Commit: abc1234
+  Service: active
+
+📥 Fetching latest changes from GitHub...
+📦 New changes available
+Changes since current version:
+xyz5678 Add new feature
+abc9012 Fix bug
+
+🛑 Stopping service...
+✓ Service stopped
+
+⬇️  Pulling latest code...
+✓ Code updated
+
+📦 Checking for dependency updates...
+✓ Dependencies updated
+
+🔄 Starting service...
+✓ Service started successfully
+
+═══════════════════════════════════════════════════════════
+✅ Update Complete!
+═══════════════════════════════════════════════════════════
+
+📊 New Status
+  Branch: main
+  Commit: xyz5678
+  Message: Add new feature
+  Service: active
+
+💡 Useful commands:
+  View logs: journalctl -u inventory-app -f
+  Restart: systemctl restart inventory-app
+  Status: systemctl status inventory-app
+```
+
 ## 🌐 Accessing Your App
 
 After installation completes:
@@ -119,48 +208,48 @@ For external access with SSL:
 
 ```bash
 # Enter container
-pct enter 200
+pct enter 600
 
 # Stop container
-pct stop 200
+pct stop 600
 
 # Start container
-pct start 200
+pct start 600
 
 # Restart container
-pct restart 200
+pct restart 600
 
 # View container config
-pct config 200
+pct config 600
 ```
 
 ### Application Management
 
 ```bash
 # Check service status
-pct exec 200 -- systemctl status inventory-app
+pct exec 600 -- systemctl status inventory-app
 
 # View logs (live)
-pct exec 200 -- journalctl -u inventory-app -f
+pct exec 600 -- journalctl -u inventory-app -f
 
 # Restart application
-pct exec 200 -- systemctl restart inventory-app
+pct exec 600 -- systemctl restart inventory-app
 
 # Stop application
-pct exec 200 -- systemctl stop inventory-app
+pct exec 600 -- systemctl stop inventory-app
 ```
 
 ### Access Application Files
 
 ```bash
 # Enter container and navigate to app
-pct enter 200
+pct enter 600
 cd /opt/invai
 
 # View logs
 journalctl -u inventory-app -n 50
 
-# Update application
+# Manual update (alternative to update script)
 git pull
 npm install
 systemctl restart inventory-app
@@ -172,8 +261,8 @@ To completely remove the installation:
 
 ```bash
 # Stop and destroy container
-pct stop 200
-pct destroy 200
+pct stop 600
+pct destroy 600
 ```
 
 ## 🔍 Troubleshooting
@@ -182,10 +271,10 @@ pct destroy 200
 
 ```bash
 # Check container status
-pct status 200
+pct status 600
 
 # View container logs
-pct enter 200
+pct enter 600
 journalctl -xe
 ```
 
@@ -193,25 +282,25 @@ journalctl -xe
 
 ```bash
 # Check application logs
-pct exec 200 -- journalctl -u inventory-app -n 50
+pct exec 600 -- journalctl -u inventory-app -n 50
 
 # Check if service is running
-pct exec 200 -- systemctl status inventory-app
+pct exec 600 -- systemctl status inventory-app
 
 # Restart application
-pct exec 200 -- systemctl restart inventory-app
+pct exec 600 -- systemctl restart inventory-app
 ```
 
 ### Can't Access from Browser
 
 1. **Get container IP:**
    ```bash
-   pct exec 200 -- hostname -I
+   pct exec 600 -- hostname -I
    ```
 
 2. **Check if port 3000 is listening:**
    ```bash
-   pct exec 200 -- ss -tlnp | grep 3000
+   pct exec 600 -- ss -tlnp | grep 3000
    ```
 
 3. **Check firewall:**
@@ -224,13 +313,31 @@ pct exec 200 -- systemctl restart inventory-app
 
 ```bash
 # Enter container
-pct enter 200
+pct enter 600
 
 # Check database location
 ls -la /opt/invai/inventory.db
 
 # Backup database
 cp /opt/invai/inventory.db /opt/invai/inventory.db.backup
+```
+
+### Update Failed
+
+```bash
+# View update logs
+pct exec 600 -- journalctl -u inventory-app -n 100
+
+# Check git status
+pct enter 600
+cd /opt/invai
+git status
+
+# Force update (discards local changes)
+git reset --hard HEAD
+git pull
+npm install
+systemctl restart inventory-app
 ```
 
 ## 📊 Resource Usage
@@ -247,11 +354,11 @@ Typical resource consumption:
 2. **Enable firewall rules** to restrict access
 3. **Regular updates:**
    ```bash
-   pct exec 200 -- apt update && apt upgrade -y
+   pct exec 600 -- apt update && apt upgrade -y
    ```
 4. **Backup database regularly:**
    ```bash
-   pct exec 200 -- cp /opt/invai/inventory.db /root/backup/
+   pct exec 600 -- cp /opt/invai/inventory.db /root/backup/
    ```
 
 ## 🆘 Support
@@ -259,7 +366,7 @@ Typical resource consumption:
 If you encounter issues:
 
 1. Check the troubleshooting section above
-2. View application logs: `pct exec 200 -- journalctl -u inventory-app -f`
+2. View application logs: `pct exec 600 -- journalctl -u inventory-app -f`
 3. Create an issue on GitHub with:
    - Proxmox version
    - Error messages
@@ -271,7 +378,7 @@ The inventory application source code: [zv20/invai](https://github.com/zv20/inva
 
 ## 🙏 Credits
 
-Inspired by [tteck's Proxmox Helper Scripts](https://github.com/tteck/Proxmox)
+Inspired by [tteck's Proxmox Helper Scripts](https://github.com/tteck/Proxmox) and [Community Scripts](https://github.com/community-scripts/ProxmoxVE)
 
 ## 📄 License
 
