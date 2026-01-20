@@ -42,8 +42,7 @@ function check_proxmox() {
         echo -e "${RED}✖ Error: This script must be run on a Proxmox VE host!${NC}"
         exit 1
     fi
-    echo -e "${GREEN}✓ Running on Proxmox VE $(pveversion | grep -oP 'pve-manager/\K[0-9.]+')
-${NC}"
+    echo -e "${GREEN}✓ Running on Proxmox VE $(pveversion | grep -oP 'pve-manager/\K[0-9.]+')${NC}"
 }
 
 # Check if running as root
@@ -76,6 +75,26 @@ function get_user_input() {
     read -p "Hostname [$DEFAULT_HOSTNAME]: " HOSTNAME
     HOSTNAME=${HOSTNAME:-$DEFAULT_HOSTNAME}
     
+    # Root Password
+    echo -e "\n${YELLOW}🔐 Set Root Password for Container${NC}"
+    echo -e "${BLUE}This will allow you to log in to the container${NC}"
+    while true; do
+        read -s -p "Enter root password (leave empty to skip): " ROOT_PASSWORD
+        echo
+        if [ -z "$ROOT_PASSWORD" ]; then
+            echo -e "${YELLOW}⚠️  No password set. Use 'pct enter $CTID' to access container${NC}"
+            break
+        fi
+        read -s -p "Confirm root password: " ROOT_PASSWORD_CONFIRM
+        echo
+        if [ "$ROOT_PASSWORD" = "$ROOT_PASSWORD_CONFIRM" ]; then
+            echo -e "${GREEN}✓ Password set successfully${NC}"
+            break
+        else
+            echo -e "${RED}✖ Passwords don't match. Try again.${NC}"
+        fi
+    done
+    
     # Disk Size
     read -p "Disk Size in GB [$DEFAULT_DISK_SIZE]: " DISK_SIZE
     DISK_SIZE=${DISK_SIZE:-$DEFAULT_DISK_SIZE}
@@ -102,6 +121,7 @@ function get_user_input() {
     echo -e "${GREEN}Configuration Summary:${NC}"
     echo -e "  Container ID: ${MAGENTA}$CTID${NC}"
     echo -e "  Hostname: ${MAGENTA}$HOSTNAME${NC}"
+    echo -e "  Root Password: ${MAGENTA}$([ -n "$ROOT_PASSWORD" ] && echo "Set" || echo "Not Set")${NC}"
     echo -e "  Disk: ${MAGENTA}${DISK_SIZE}GB${NC}"
     echo -e "  Memory: ${MAGENTA}${MEMORY}MB${NC}"
     echo -e "  CPU Cores: ${MAGENTA}$CORES${NC}"
@@ -173,8 +193,14 @@ function download_template() {
 function create_container() {
     echo -e "\n${YELLOW}🔧 Creating LXC container...${NC}"
     
+    # Build password argument if provided
+    PASSWORD_ARG=""
+    if [ -n "${ROOT_PASSWORD:-}" ]; then
+        PASSWORD_ARG="--password '$ROOT_PASSWORD'"
+    fi
+    
     # Create container
-    if pct create $CTID $TEMPLATE_PATH \
+    if eval pct create $CTID $TEMPLATE_PATH \
         --hostname $HOSTNAME \
         --memory $MEMORY \
         --cores $CORES \
@@ -183,6 +209,7 @@ function create_container() {
         --features nesting=1 \
         --unprivileged 1 \
         --onboot 1 \
+        $PASSWORD_ARG \
         --start 1; then
         
         echo -e "${GREEN}✓ Container created and started${NC}"
@@ -339,6 +366,18 @@ function completion_message() {
     echo -e "${MAGENTA}📊 Container Details:${NC}"
     echo -e "  Container ID: ${CYAN}$CTID${NC}"
     echo -e "  Hostname: ${CYAN}$HOSTNAME${NC}"
+    
+    if [ -n "${ROOT_PASSWORD:-}" ]; then
+        echo -e "  Root Password: ${GREEN}Set${NC}"
+        echo -e "\n${GREEN}🔐 Login Methods:${NC}"
+        echo -e "  From Proxmox: ${CYAN}pct enter $CTID${NC}"
+        echo -e "  SSH (if enabled): ${CYAN}ssh root@$CONTAINER_IP${NC}"
+    else
+        echo -e "  Root Password: ${YELLOW}Not Set${NC}"
+        echo -e "\n${GREEN}🔐 Login Method:${NC}"
+        echo -e "  From Proxmox: ${CYAN}pct enter $CTID${NC}"
+        echo -e "  Set password: ${CYAN}pct exec $CTID -- passwd${NC}"
+    fi
     
     if [ -n "$CONTAINER_IP" ]; then
         echo -e "  IP Address: ${CYAN}$CONTAINER_IP${NC}"
