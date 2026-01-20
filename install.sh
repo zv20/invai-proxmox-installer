@@ -39,7 +39,7 @@ function banner() {
 # Check if running on Proxmox
 function check_proxmox() {
     if ! command -v pveversion &> /dev/null; then
-        echo -e "${RED}❌ Error: This script must be run on a Proxmox VE host!${NC}"
+        echo -e "${RED}✖ Error: This script must be run on a Proxmox VE host!${NC}"
         exit 1
     fi
     echo -e "${GREEN}✓ Running on Proxmox VE $(pveversion | grep -oP 'pve-manager/\K[0-9.]+')
@@ -49,7 +49,7 @@ ${NC}"
 # Check if running as root
 function check_root() {
     if [[ $EUID -ne 0 ]]; then
-        echo -e "${RED}❌ This script must be run as root${NC}"
+        echo -e "${RED}✖ This script must be run as root${NC}"
         exit 1
     fi
     echo -e "${GREEN}✓ Running with root privileges${NC}"
@@ -66,7 +66,7 @@ function get_user_input() {
         CTID=${CTID:-$DEFAULT_CTID}
         
         if pct status $CTID &>/dev/null; then
-            echo -e "${RED}❌ Container $CTID already exists!${NC}"
+            echo -e "${RED}✖ Container $CTID already exists!${NC}"
         else
             break
         fi
@@ -94,7 +94,7 @@ function get_user_input() {
     
     # Storage selection
     echo -e "\n${YELLOW}Available Storage:${NC}"
-    pvesm status | grep -E '^[^ ]+' | awk '{print "  • " $1}'
+    pvesm status | grep -E '^[^ ]+' | awk 'NR>1 {print "  • " $1}'
     read -p "Storage for container [local-lvm]: " STORAGE
     STORAGE=${STORAGE:-local-lvm}
     
@@ -119,16 +119,55 @@ function get_user_input() {
 
 # Download Debian template if not exists
 function download_template() {
-    echo -e "\n${YELLOW}📥 Checking for Debian 12 template...${NC}"
+    echo -e "\n${YELLOW}📥 Checking for Debian template...${NC}"
     
-    TEMPLATE="debian-12-standard_12.7-1_amd64.tar.zst"
+    # First, update available templates
+    echo -e "${YELLOW}Updating template list...${NC}"
+    pveam update || true
     
-    if ! pveam list local | grep -q "$TEMPLATE"; then
-        echo -e "${YELLOW}Downloading Debian 12 template...${NC}"
-        pveam download local $TEMPLATE
-        echo -e "${GREEN}✓ Template downloaded${NC}"
+    # List all available Debian templates
+    AVAILABLE_TEMPLATES=$(pveam available | grep -i "debian" | grep -i "standard" || true)
+    
+    if [ -z "$AVAILABLE_TEMPLATES" ]; then
+        echo -e "${RED}✖ No Debian templates found in repositories${NC}"
+        echo -e "${YELLOW}Available templates:${NC}"
+        pveam available | head -20
+        exit 1
+    fi
+    
+    # Try to find the latest Debian 12 template
+    TEMPLATE=$(echo "$AVAILABLE_TEMPLATES" | grep "debian-12" | tail -1 | awk '{print $2}' || echo "")
+    
+    # If no Debian 12, try Debian 11
+    if [ -z "$TEMPLATE" ]; then
+        echo -e "${YELLOW}Debian 12 not found, trying Debian 11...${NC}"
+        TEMPLATE=$(echo "$AVAILABLE_TEMPLATES" | grep "debian-11" | tail -1 | awk '{print $2}' || echo "")
+    fi
+    
+    if [ -z "$TEMPLATE" ]; then
+        echo -e "${RED}✖ Could not find a suitable Debian template${NC}"
+        echo -e "${YELLOW}Available Debian templates:${NC}"
+        echo "$AVAILABLE_TEMPLATES"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}✓ Selected template: $TEMPLATE${NC}"
+    
+    # Check if already downloaded
+    if pveam list local | grep -q "$TEMPLATE"; then
+        echo -e "${GREEN}✓ Template already downloaded${NC}"
+        TEMPLATE_PATH="local:vztmpl/$TEMPLATE"
     else
-        echo -e "${GREEN}✓ Template already available${NC}"
+        echo -e "${YELLOW}Downloading template: $TEMPLATE${NC}"
+        echo -e "${BLUE}This may take a few minutes...${NC}"
+        
+        if pveam download local "$TEMPLATE"; then
+            echo -e "${GREEN}✓ Template downloaded successfully${NC}"
+            TEMPLATE_PATH="local:vztmpl/$TEMPLATE"
+        else
+            echo -e "${RED}✖ Failed to download template${NC}"
+            exit 1
+        fi
     fi
 }
 
@@ -136,18 +175,8 @@ function download_template() {
 function create_container() {
     echo -e "\n${YELLOW}🔧 Creating LXC container...${NC}"
     
-    # Get template path
-    TEMPLATE_PATH=$(pveam path local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst 2>/dev/null || 
-                    pveam path local:vztmpl/debian-12-standard_12.0-1_amd64.tar.zst 2>/dev/null || 
-                    echo "")
-    
-    if [ -z "$TEMPLATE_PATH" ]; then
-        echo -e "${RED}❌ Debian template not found!${NC}"
-        exit 1
-    fi
-    
     # Create container
-    pct create $CTID $TEMPLATE_PATH \
+    if pct create $CTID $TEMPLATE_PATH \
         --hostname $HOSTNAME \
         --memory $MEMORY \
         --cores $CORES \
@@ -156,13 +185,29 @@ function create_container() {
         --features nesting=1 \
         --unprivileged 1 \
         --onboot 1 \
-        --start 1
-    
-    echo -e "${GREEN}✓ Container created and started${NC}"
+        --start 1; then
+        
+        echo -e "${GREEN}✓ Container created and started${NC}"
+    else
+        echo -e "${RED}✖ Failed to create container${NC}"
+        exit 1
+    fi
     
     # Wait for container to fully start
     echo -e "${YELLOW}⏳ Waiting for container to initialize...${NC}"
     sleep 5
+    
+    # Wait for network to be ready
+    local MAX_WAIT=30
+    local WAITED=0
+    while [ $WAITED -lt $MAX_WAIT ]; do
+        if pct exec $CTID -- ip addr show eth0 | grep -q "inet "; then
+            echo -e "${GREEN}✓ Container network is ready${NC}"
+            break
+        fi
+        sleep 2
+        WAITED=$((WAITED + 2))
+    done
 }
 
 # Install application in container
@@ -249,13 +294,19 @@ EOFSCRIPT
     
     # Make executable and run
     pct exec $CTID -- chmod +x /tmp/install_app.sh
-    pct exec $CTID -- /tmp/install_app.sh
+    
+    echo -e "${BLUE}Running installation inside container (this may take a few minutes)...${NC}"
+    if pct exec $CTID -- /tmp/install_app.sh; then
+        echo -e "${GREEN}✓ Application installed successfully${NC}"
+    else
+        echo -e "${RED}✖ Application installation failed${NC}"
+        echo -e "${YELLOW}Check logs with: pct exec $CTID -- journalctl -u inventory-app -n 50${NC}"
+        exit 1
+    fi
     
     # Cleanup
-    rm /tmp/install_app_${CTID}.sh
-    pct exec $CTID -- rm /tmp/install_app.sh
-    
-    echo -e "${GREEN}✓ Application installed successfully${NC}"
+    rm -f /tmp/install_app_${CTID}.sh
+    pct exec $CTID -- rm -f /tmp/install_app.sh
 }
 
 # Get container IP
@@ -266,11 +317,11 @@ function get_container_ip() {
     sleep 2
     
     # Try multiple methods to get IP
-    CONTAINER_IP=$(pct exec $CTID -- hostname -I | awk '{print $1}' || echo "")
+    CONTAINER_IP=$(pct exec $CTID -- hostname -I | awk '{print $1}' 2>/dev/null || echo "")
     
     if [ -z "$CONTAINER_IP" ]; then
         # Alternative method
-        CONTAINER_IP=$(pct exec $CTID -- ip -4 addr show eth0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo "")
+        CONTAINER_IP=$(pct exec $CTID -- ip -4 addr show eth0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}' 2>/dev/null || echo "")
     fi
     
     if [ -z "$CONTAINER_IP" ]; then
@@ -319,7 +370,7 @@ function completion_message() {
 
 # Error handler
 function error_handler() {
-    echo -e "\n${RED}❌ An error occurred during installation!${NC}"
+    echo -e "\n${RED}✖ An error occurred during installation!${NC}"
     echo -e "${YELLOW}Check the error messages above for details.${NC}"
     
     if pct status $CTID &>/dev/null; then
