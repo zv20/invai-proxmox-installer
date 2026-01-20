@@ -121,52 +121,51 @@ function get_user_input() {
 function download_template() {
     echo -e "\n${YELLOW}📥 Checking for Debian template...${NC}"
     
-    # First, update available templates
+    # Update available templates
     echo -e "${YELLOW}Updating template list...${NC}"
-    pveam update || true
+    pveam update
     
-    # List all available Debian templates
-    AVAILABLE_TEMPLATES=$(pveam available | grep -i "debian" | grep -i "standard" || true)
+    # Find Debian 12 standard template from system repo
+    TEMPLATE_NAME=$(pveam available | grep "^system" | grep "debian-12-standard" | awk '{print $2}' | head -1)
     
-    if [ -z "$AVAILABLE_TEMPLATES" ]; then
-        echo -e "${RED}✖ No Debian templates found in repositories${NC}"
-        echo -e "${YELLOW}Available templates:${NC}"
-        pveam available | head -20
-        exit 1
+    if [ -z "$TEMPLATE_NAME" ]; then
+        echo -e "${YELLOW}Debian 12 not found, trying Debian 13...${NC}"
+        TEMPLATE_NAME=$(pveam available | grep "^system" | grep "debian-13-standard" | awk '{print $2}' | head -1)
     fi
     
-    # Try to find the latest Debian 12 template
-    TEMPLATE=$(echo "$AVAILABLE_TEMPLATES" | grep "debian-12" | tail -1 | awk '{print $2}' || echo "")
-    
-    # If no Debian 12, try Debian 11
-    if [ -z "$TEMPLATE" ]; then
-        echo -e "${YELLOW}Debian 12 not found, trying Debian 11...${NC}"
-        TEMPLATE=$(echo "$AVAILABLE_TEMPLATES" | grep "debian-11" | tail -1 | awk '{print $2}' || echo "")
-    fi
-    
-    if [ -z "$TEMPLATE" ]; then
+    if [ -z "$TEMPLATE_NAME" ]; then
         echo -e "${RED}✖ Could not find a suitable Debian template${NC}"
-        echo -e "${YELLOW}Available Debian templates:${NC}"
-        echo "$AVAILABLE_TEMPLATES"
+        echo -e "${YELLOW}Available templates:${NC}"
+        pveam available | grep "^system" | grep "debian"
         exit 1
     fi
     
-    echo -e "${GREEN}✓ Selected template: $TEMPLATE${NC}"
+    echo -e "${GREEN}✓ Selected template: $TEMPLATE_NAME${NC}"
     
     # Check if already downloaded
-    if pveam list local | grep -q "$TEMPLATE"; then
+    if pveam list local | grep -q "$TEMPLATE_NAME"; then
         echo -e "${GREEN}✓ Template already downloaded${NC}"
-        TEMPLATE_PATH="local:vztmpl/$TEMPLATE"
+        TEMPLATE_PATH="local:vztmpl/$TEMPLATE_NAME"
     else
-        echo -e "${YELLOW}Downloading template: $TEMPLATE${NC}"
+        echo -e "${YELLOW}Downloading template: $TEMPLATE_NAME${NC}"
         echo -e "${BLUE}This may take a few minutes...${NC}"
         
-        if pveam download local "$TEMPLATE"; then
+        # Download from system repository to local storage
+        if pveam download local "system:$TEMPLATE_NAME"; then
             echo -e "${GREEN}✓ Template downloaded successfully${NC}"
-            TEMPLATE_PATH="local:vztmpl/$TEMPLATE"
+            TEMPLATE_PATH="local:vztmpl/$TEMPLATE_NAME"
         else
             echo -e "${RED}✖ Failed to download template${NC}"
-            exit 1
+            echo -e "${YELLOW}Trying alternative download method...${NC}"
+            
+            # Try without 'system:' prefix
+            if pveam download local "$TEMPLATE_NAME"; then
+                echo -e "${GREEN}✓ Template downloaded successfully${NC}"
+                TEMPLATE_PATH="local:vztmpl/$TEMPLATE_NAME"
+            else
+                echo -e "${RED}✖ Failed to download template${NC}"
+                exit 1
+            fi
         fi
     fi
 }
@@ -201,7 +200,7 @@ function create_container() {
     local MAX_WAIT=30
     local WAITED=0
     while [ $WAITED -lt $MAX_WAIT ]; do
-        if pct exec $CTID -- ip addr show eth0 | grep -q "inet "; then
+        if pct exec $CTID -- ip addr show eth0 2>/dev/null | grep -q "inet "; then
             echo -e "${GREEN}✓ Container network is ready${NC}"
             break
         fi
@@ -295,7 +294,7 @@ EOFSCRIPT
     # Make executable and run
     pct exec $CTID -- chmod +x /tmp/install_app.sh
     
-    echo -e "${BLUE}Running installation inside container (this may take a few minutes)...${NC}"
+    echo -e "${BLUE}Running installation inside container (this may take 5-10 minutes)...${NC}"
     if pct exec $CTID -- /tmp/install_app.sh; then
         echo -e "${GREEN}✓ Application installed successfully${NC}"
     else
