@@ -155,7 +155,6 @@ function download_template() {
             echo -e "${GREEN}✓ Template downloaded successfully${NC}"
             TEMPLATE_PATH="local:vztmpl/$TEMPLATE_NAME"
         else
-            echo -e "${RED}✖ Failed to download template${NC}"
             echo -e "${YELLOW}Trying alternative download method...${NC}"
             
             # Try without 'system:' prefix
@@ -223,7 +222,7 @@ echo "Updating system..."
 apt update && apt upgrade -y
 
 echo "Installing prerequisites..."
-apt install -y curl git ca-certificates gnupg
+apt install -y curl git ca-certificates gnupg build-essential python3
 
 echo "Installing Node.js 20 LTS..."
 curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
