@@ -24,7 +24,12 @@ DEFAULT_BRIDGE="vmbr0"
 APP_PORT="3000"
 
 # GitHub repository
-GITHUB_REPO="https://github.com/zv20/invai.git"
+GITHUB_USER="zv20"
+GITHUB_REPO_NAME="invai"
+GITHUB_REPO="https://github.com/${GITHUB_USER}/${GITHUB_REPO_NAME}.git"
+
+# Branch selection (will be set during configuration)
+SELECTED_BRANCH=""
 
 # Banner
 function banner() {
@@ -52,6 +57,99 @@ function check_root() {
         exit 1
     fi
     echo -e "${GREEN}✓ Running with root privileges${NC}"
+}
+
+# Fetch available branches from GitHub
+function fetch_branches() {
+    echo -e "\n${YELLOW}🌿 Fetching available branches from GitHub...${NC}"
+    
+    # Fetch branches using GitHub API
+    local api_url="https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO_NAME}/branches"
+    
+    if ! command -v curl &> /dev/null; then
+        echo -e "${YELLOW}⚠️  curl not found, installing...${NC}"
+        apt-get update -qq && apt-get install -y curl -qq
+    fi
+    
+    # Fetch and parse branch data
+    local branch_data=$(curl -s "$api_url" 2>/dev/null)
+    
+    if [ -z "$branch_data" ] || echo "$branch_data" | grep -q "API rate limit"; then
+        echo -e "${YELLOW}⚠️  Unable to fetch branches from GitHub API${NC}"
+        echo -e "${BLUE}Using fallback method...${NC}"
+        
+        # Fallback: use git ls-remote
+        if command -v git &> /dev/null || (apt-get update -qq && apt-get install -y git -qq); then
+            AVAILABLE_BRANCHES=($(git ls-remote --heads "$GITHUB_REPO" | awk '{print $2}' | sed 's|refs/heads/||' | sort))
+        else
+            echo -e "${RED}✖ Unable to fetch branches. Using default 'main' branch.${NC}"
+            AVAILABLE_BRANCHES=("main")
+        fi
+    else
+        # Parse JSON response to get branch names
+        AVAILABLE_BRANCHES=($(echo "$branch_data" | grep '"name"' | cut -d'"' -f4 | sort))
+    fi
+    
+    if [ ${#AVAILABLE_BRANCHES[@]} -eq 0 ]; then
+        echo -e "${RED}✖ No branches found. Using default 'main' branch.${NC}"
+        AVAILABLE_BRANCHES=("main")
+    else
+        echo -e "${GREEN}✓ Found ${#AVAILABLE_BRANCHES[@]} branch(es)${NC}"
+    fi
+}
+
+# Select branch interactively
+function select_branch() {
+    echo -e "\n${YELLOW}🌿 Branch Selection${NC}"
+    echo -e "${BLUE}Available branches for ${GITHUB_USER}/${GITHUB_REPO_NAME}:${NC}\n"
+    
+    # Display branches with numbers
+    local index=1
+    for branch in "${AVAILABLE_BRANCHES[@]}"; do
+        if [ "$branch" = "main" ]; then
+            echo -e "  ${GREEN}${index})${NC} ${CYAN}${branch}${NC} ${MAGENTA}(default)${NC}"
+        else
+            echo -e "  ${GREEN}${index})${NC} ${branch}"
+        fi
+        ((index++))
+    done
+    
+    echo -e "  ${GREEN}${index})${NC} ${YELLOW}Enter custom branch name${NC}"
+    echo
+    
+    # Find main branch index (default)
+    local main_index=1
+    for i in "${!AVAILABLE_BRANCHES[@]}"; do
+        if [ "${AVAILABLE_BRANCHES[$i]}" = "main" ]; then
+            main_index=$((i + 1))
+            break
+        fi
+    done
+    
+    while true; do
+        read -p "Select branch [${main_index}]: " branch_choice
+        branch_choice=${branch_choice:-$main_index}
+        
+        # Check if custom branch option selected
+        if [ "$branch_choice" = "${index}" ]; then
+            read -p "Enter custom branch name: " SELECTED_BRANCH
+            if [ -z "$SELECTED_BRANCH" ]; then
+                echo -e "${RED}✖ Branch name cannot be empty${NC}"
+                continue
+            fi
+            echo -e "${YELLOW}⚠️  Custom branch '${SELECTED_BRANCH}' will be used (not validated)${NC}"
+            break
+        fi
+        
+        # Validate selection
+        if [[ "$branch_choice" =~ ^[0-9]+$ ]] && [ "$branch_choice" -ge 1 ] && [ "$branch_choice" -lt "$index" ]; then
+            SELECTED_BRANCH="${AVAILABLE_BRANCHES[$((branch_choice - 1))]}"
+            echo -e "${GREEN}✓ Selected branch: ${CYAN}${SELECTED_BRANCH}${NC}"
+            break
+        else
+            echo -e "${RED}✖ Invalid selection. Please choose 1-${index}${NC}"
+        fi
+    done
 }
 
 # Get user input with defaults
@@ -179,6 +277,7 @@ function get_user_input() {
         echo -e "  Gateway: ${MAGENTA}$GATEWAY${NC}"
     fi
     echo -e "  Storage: ${MAGENTA}$STORAGE${NC}"
+    echo -e "  Branch: ${MAGENTA}${SELECTED_BRANCH}${NC}"
     echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}\n"
     
     read -p "Proceed with installation? (y/n): " -n 1 -r
@@ -310,9 +409,9 @@ apt install -y nodejs
 echo "Node.js version: $(node --version)"
 echo "npm version: $(npm --version)"
 
-echo "Cloning application repository..."
+echo "Cloning application repository (branch: SELECTED_BRANCH)..."
 cd /opt
-git clone GITHUB_REPO invai
+git clone -b SELECTED_BRANCH GITHUB_REPO invai
 cd invai
 
 echo "Installing application dependencies..."
@@ -340,6 +439,10 @@ echo
 
 cd /opt/invai || exit 1
 
+# Get current branch
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+echo -e "${BLUE}Current branch: ${CURRENT_BRANCH}${NC}"
+
 echo -e "${YELLOW}⏳ Stopping application service...${NC}"
 systemctl stop inventory-app
 
@@ -357,8 +460,8 @@ if [ $LOCAL = $REMOTE ]; then
     exit 0
 fi
 
-echo -e "${BLUE}🔽 Pulling latest changes...${NC}"
-git pull origin main
+echo -e "${BLUE}🔽 Pulling latest changes from ${CURRENT_BRANCH}...${NC}"
+git pull origin $CURRENT_BRANCH
 
 echo -e "${YELLOW}📦 Updating dependencies...${NC}"
 npm install --production
@@ -375,6 +478,7 @@ if systemctl is-active --quiet inventory-app; then
     # Show current version
     VERSION=$(jq -r '.version // "unknown"' /opt/invai/package.json 2>/dev/null || echo "unknown")
     IP=$(hostname -I | awk '{print $1}')
+    echo -e "${GREEN}Branch: ${CURRENT_BRANCH}${NC}"
     echo -e "${GREEN}Version: ${VERSION}${NC}"
     echo -e "${GREEN}Access at: http://${IP}:3000${NC}"
 else
@@ -408,6 +512,7 @@ NC='\033[0m'
 
 # Get app info
 VERSION=$(jq -r '.version // "unknown"' /opt/invai/package.json 2>/dev/null || echo "unknown")
+BRANCH=$(cd /opt/invai && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 IP=$(hostname -I | awk '{print $1}')
 PORT="3000"
 STATUS=$(systemctl is-active inventory-app 2>/dev/null || echo "inactive")
@@ -426,6 +531,7 @@ echo -e "│     ${MAGENTA}📦 Inventory Management System${CYAN}              
 echo "╰──────────────────────────────────────────────────────────────────────╯"
 echo -e "${NC}"
 echo -e "  ${BLUE}Version:${NC}  ${GREEN}v${VERSION}${NC}"
+echo -e "  ${BLUE}Branch:${NC}   ${GREEN}${BRANCH}${NC}"
 echo -e "  ${BLUE}Status:${NC}   ${STATUS_ICON} ${STATUS_TEXT}"
 echo -e "  ${BLUE}IP Addr:${NC}  ${YELLOW}${IP}${NC}"
 echo -e "  ${BLUE}Port:${NC}     ${YELLOW}${PORT}${NC}"
@@ -484,8 +590,9 @@ fi
 echo "Installation complete!"
 EOFSCRIPT
 
-    # Replace GitHub repo URL
+    # Replace placeholders
     sed -i "s|GITHUB_REPO|$GITHUB_REPO|g" /tmp/install_app_${CTID}.sh
+    sed -i "s|SELECTED_BRANCH|$SELECTED_BRANCH|g" /tmp/install_app_${CTID}.sh
     
     # Copy script to container
     pct push $CTID /tmp/install_app_${CTID}.sh /tmp/install_app.sh
@@ -539,6 +646,7 @@ function completion_message() {
     echo -e "${MAGENTA}📊 Container Details:${NC}"
     echo -e "  Container ID: ${CYAN}$CTID${NC}"
     echo -e "  Hostname: ${CYAN}$HOSTNAME${NC}"
+    echo -e "  Branch: ${CYAN}${SELECTED_BRANCH}${NC}"
     
     if [ -n "${ROOT_PASSWORD:-}" ]; then
         echo -e "  Root Password: ${GREEN}Set${NC}"
@@ -565,7 +673,7 @@ function completion_message() {
     
     echo -e "${MAGENTA}🔄 Update Command:${NC}"
     echo -e "  Inside container, run: ${CYAN}update${NC}"
-    echo -e "  This will fetch and install the latest version from GitHub\n"
+    echo -e "  This will fetch and install the latest version from the ${CYAN}${SELECTED_BRANCH}${NC} branch\n"
     
     echo -e "${MAGENTA}🔧 Useful Commands:${NC}"
     echo -e "  Check status: ${CYAN}pct exec $CTID -- systemctl status inventory-app${NC}"
@@ -606,6 +714,8 @@ function main() {
     banner
     check_root
     check_proxmox
+    fetch_branches
+    select_branch
     get_user_input
     download_template
     create_container
