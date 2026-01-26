@@ -421,6 +421,19 @@ echo "Creating data directory..."
 mkdir -p data
 chmod 755 data
 
+echo "Generating secure JWT_SECRET..."
+JWT_SECRET=$(node -e "console.log(require('crypto').randomBytes(64).toString('hex'))")
+
+echo "Saving JWT_SECRET to .env file..."
+cat > /opt/invai/.env << ENVEOF
+JWT_SECRET=${JWT_SECRET}
+NODE_ENV=production
+PORT=3000
+ENVEOF
+
+chmod 600 /opt/invai/.env
+echo "✓ JWT_SECRET generated and saved"
+
 echo "Creating update script..."
 cat > /usr/local/bin/update-inventory << 'UPDATEEOF'
 #!/bin/bash
@@ -549,8 +562,8 @@ chmod +x /etc/update-motd.d/10-inventory-app
 # Clear existing MOTD
 echo "" > /etc/motd
 
-echo "Creating systemd service..."
-cat > /etc/systemd/system/inventory-app.service << 'EOF'
+echo "Creating systemd service with environment variables..."
+cat > /etc/systemd/system/inventory-app.service << EOF
 [Unit]
 Description=Inventory Management Application
 After=network.target
@@ -562,8 +575,7 @@ WorkingDirectory=/opt/invai
 ExecStart=/usr/bin/node /opt/invai/server.js
 Restart=always
 RestartSec=10
-Environment=NODE_ENV=production
-Environment=PORT=3000
+EnvironmentFile=/opt/invai/.env
 StandardOutput=journal
 StandardError=journal
 
@@ -583,6 +595,7 @@ if systemctl is-active --quiet inventory-app; then
     echo "✓ Service started successfully"
 else
     echo "✗ Service failed to start"
+    echo "Checking logs..."
     journalctl -u inventory-app -n 20
     exit 1
 fi
