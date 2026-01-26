@@ -11,6 +11,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
 
 APP_DIR="/opt/invai"
@@ -33,6 +34,18 @@ if [ ! -d "$APP_DIR" ]; then
 fi
 
 cd "$APP_DIR"
+
+# Check if .env file exists
+if [ ! -f "$APP_DIR/.env" ]; then
+    echo -e "${YELLOW}⚠️  Warning: .env file not found${NC}"
+    echo -e "${BLUE}The application may require environment variables like JWT_SECRET${NC}"
+    echo -e "${BLUE}To generate a new .env file:${NC}"
+    echo -e "  ${CYAN}cd $APP_DIR${NC}"
+    echo -e "  ${CYAN}node -e \"console.log('JWT_SECRET=' + require('crypto').randomBytes(64).toString('hex'))\" > .env${NC}"
+    echo -e "  ${CYAN}echo 'NODE_ENV=production' >> .env${NC}"
+    echo -e "  ${CYAN}echo 'PORT=3000' >> .env${NC}"
+    echo -e "  ${CYAN}chmod 600 .env${NC}\n"
+fi
 
 echo -e "${YELLOW}📋 Current Status${NC}"
 echo -e "  Branch: ${CYAN}$(git branch --show-current)${NC}"
@@ -71,7 +84,7 @@ echo -e "${BLUE}Changes since current version:${NC}"
 git log --oneline HEAD..@{u} | head -10
 echo
 
-echo -e "${YELLOW}🛑 Stopping service...${NC}"
+echo -e "${YELLOW}🛁 Stopping service...${NC}"
 systemctl stop $SERVICE_NAME
 echo -e "${GREEN}✓ Service stopped${NC}\n"
 
@@ -89,7 +102,7 @@ fi
 
 echo -e "${YELLOW}🔄 Starting service...${NC}"
 systemctl start $SERVICE_NAME
-sleep 2
+sleep 3
 
 if systemctl is-active --quiet $SERVICE_NAME; then
     echo -e "${GREEN}✓ Service started successfully${NC}\n"
@@ -104,13 +117,22 @@ if systemctl is-active --quiet $SERVICE_NAME; then
     echo -e "  Message: ${CYAN}$(git log -1 --pretty=%B | head -1)${NC}"
     echo -e "  Service: ${GREEN}$(systemctl is-active $SERVICE_NAME)${NC}\n"
     
+    # Get IP address
+    IP=$(hostname -I | awk '{print $1}')
+    if [ -n "$IP" ]; then
+        echo -e "${GREEN}🌐 Application Access:${NC}"
+        echo -e "  URL: ${CYAN}http://${IP}:3000${NC}\n"
+    fi
+    
     echo -e "${BLUE}💡 Useful commands:${NC}"
     echo -e "  View logs: ${CYAN}journalctl -u $SERVICE_NAME -f${NC}"
     echo -e "  Restart: ${CYAN}systemctl restart $SERVICE_NAME${NC}"
     echo -e "  Status: ${CYAN}systemctl status $SERVICE_NAME${NC}\n"
 else
     echo -e "${RED}✖ Service failed to start${NC}"
-    echo -e "${YELLOW}Viewing last 20 log lines:${NC}\n"
-    journalctl -u $SERVICE_NAME -n 20 --no-pager
+    echo -e "${YELLOW}Viewing last 30 log lines:${NC}\n"
+    journalctl -u $SERVICE_NAME -n 30 --no-pager
+    echo -e "\n${YELLOW}Check if .env file exists and contains required variables:${NC}"
+    echo -e "  ${CYAN}cat $APP_DIR/.env${NC}\n"
     exit 1
 fi
